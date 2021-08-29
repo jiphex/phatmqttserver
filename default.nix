@@ -2,15 +2,15 @@ with import <nixpkgs> {};
 #{ stdenv, buildGoModule, fetchFromGitHub }:
 buildGoModule rec {
   name = "phatmqttserver";
-  version = "0.0.1";
+  version = "0.0.2";
   src = fetchFromGitHub {
     owner = "jiphex";
     repo = name;
     rev = "v${version}";
-    sha256 = "1k021j79dgnhm99nsh7mhjsd75iagrl8l71cf40dwzywj119gdn7";
+    sha256 = "0ginmy1msf4h3p0qr8r9fqqssk2vkrcllg3csp96mbcw126y6pn1";
   };
-  vendorSha256 = "1vh76157824vbvbp3j6b4zy6m9vwmjyc5hwpm2a182dy7j9y0q0x";
-  subPackages = [ "cmd/imgtool" "cmd/phatmqttserver" ];
+  vendorSha256 = "199lv569msazw81f0r4sybpf6vdm3ygxg3acdjm16pq72a1hdv8a";
+  subPackages = [ "cmd/imgtool" "cmd/server" ];
   runVend = false;
   meta = with stdenv.lib; {};
 }
