@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -29,8 +30,8 @@ import (
 
 var (
 	phatPallete = color.Palette{
-		color.Black,
 		color.White,
+		color.Black,
 		color.RGBA{255, 0, 0, 255},
 	}
 )
@@ -45,6 +46,21 @@ func (si *StoredImage) ETag() string {
 	hash := sha256.New()
 	hash.Write(si.Image)
 	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func (si *StoredImage) JSONRepresentation(url string) ([]byte, error) {
+	type imageObject struct {
+		URL  string `json:"url"`
+		Hash string `json:"hash"`
+	}
+	iobj := imageObject{
+		URL:  url,
+		Hash: si.ETag(),
+	}
+	buf := &bytes.Buffer{}
+	enc := json.NewEncoder(buf)
+	err := enc.Encode(iobj)
+	return buf.Bytes(), err
 }
 
 func CreateImage(from io.Reader, convert bool) (*StoredImage, error) {
@@ -115,8 +131,12 @@ func (ws *WatcherServer) publishPost() error {
 	defer imgMutex.RUnlock()
 	if ws.lastimg != nil {
 		u := strings.Join([]string{ws.ExternalURL, "image"}, "/")
-		ws.client.Publish("phat/image", byte(1), false, u).Wait()
-		log.Info("published")
+		imgd, err := ws.lastimg.JSONRepresentation(u)
+		if err != nil {
+			return err
+		}
+		ws.client.Publish("phat/image", byte(1), false, imgd).Wait()
+		// log.Info("published")
 		return nil
 	} else {
 		return errors.New("not ready")
@@ -132,7 +152,7 @@ func (ws *WatcherServer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		log.WithFields(log.Fields{
 			"client-addr": req.RemoteAddr,
 			"method":      req.Method,
-		}).Info(req.URL.Path)
+		}).Infof("HTTP %s", req.URL.Path)
 	}(req)
 	var err error
 	switch req.Method {
