@@ -57,8 +57,12 @@ func CreateImage(from io.Reader, convert bool) (*StoredImage, error) {
 		return nil, fmt.Errorf("undecodable image")
 	}
 	if imc.Width != 212 || imc.Height != 104 {
-		log.WithField("problem", "incorrect-size").Error("bad image")
-		return nil, fmt.Errorf("bad image size")
+		simgsize := fmt.Sprintf("%dx%d", imc.Width, imc.Height)
+		log.WithFields(log.Fields{
+			"problem": "incorrect-size",
+			"badsize": simgsize,
+		}).Error("bad image size")
+		return nil, fmt.Errorf("bad image size: %s", simgsize)
 	}
 	log.WithField("format", f).Info("decoded image OK")
 	if err != nil {
@@ -141,6 +145,7 @@ func (ws *WatcherServer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			if err != nil {
 				rw.WriteHeader(http.StatusNotAcceptable)
 				fmt.Fprintf(rw, "ERROR: %s", err.Error())
+				return
 			}
 			rw.WriteHeader(http.StatusCreated)
 			log.WithFields(log.Fields{
