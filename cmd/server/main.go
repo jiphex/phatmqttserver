@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
 	"image/draw"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -26,14 +25,8 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
-)
 
-var (
-	phatPallete = color.Palette{
-		color.White,
-		color.Black,
-		color.RGBA{255, 0, 0, 255},
-	}
+	"github.com/jiphex/phatmqttserver/internal/pkg/phat"
 )
 
 type StoredImage struct {
@@ -93,7 +86,7 @@ func CreateImage(from io.Reader, convert bool) (*StoredImage, error) {
 			log.WithError(err).Error("unable to decode image")
 			return nil, err
 		}
-		out := image.NewPaletted(img.Bounds(), phatPallete)
+		out := image.NewPaletted(img.Bounds(), phat.Palette)
 		draw.Draw(out, img.Bounds(), img, img.Bounds().Min, draw.Src)
 		buf := new(bytes.Buffer)
 		png.Encode(buf, out)
@@ -116,12 +109,37 @@ type WatcherServer struct {
 	Broker      string
 }
 
+type ClientStatusStatus string
+
+const (
+	ALIVE    ClientStatusStatus = "ALIVE"
+	DEAD     ClientStatusStatus = "DEAD"
+	SHUTDOWN ClientStatusStatus = "SHUTDOWN"
+)
+
+type ClientStatus struct {
+	Status ClientStatusStatus
+}
+
+var (
+	imgMutex = &sync.RWMutex{}
+	clients  = map[string]ClientStatus{}
+)
+
+func (ws *WatcherServer) clientUpdate(cl mqtt.Client, msg mqtt.Message) {
+	topicparts := strings.SplitN(msg.Topic(), "/", 3)
+	clients[topicparts[2]] = ClientStatus{
+		Status: ClientStatusStatus(msg.Payload()),
+	}
+}
+
 func (ws *WatcherServer) mqttOpts() *mqtt.ClientOptions {
 	opts := &mqtt.ClientOptions{}
 	opts.SetClientID("mqttphatserver")
 	opts.AddBroker(ws.Broker)
 	opts.OnConnect = func(client mqtt.Client) {
 		log.WithField("broker", ws.Broker).Info("mqtt broker connected")
+		client.Subscribe("phat/client/*", byte(1), ws.clientUpdate)
 	}
 	return opts
 }
@@ -142,10 +160,6 @@ func (ws *WatcherServer) publishPost() error {
 		return errors.New("not ready")
 	}
 }
-
-var (
-	imgMutex = &sync.RWMutex{}
-)
 
 func (ws *WatcherServer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	defer func(req *http.Request) {
@@ -191,7 +205,7 @@ func (ws *WatcherServer) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			rw.Header().Add("Content-Type", ws.lastimg.Type)
 			rw.Header().Set("ETag", ws.lastimg.ETag())
 			// wb, err := rw.Write(ws.lastimg.image)
-			http.ServeContent(rw, req, "image.png", ws.lastimg.StoredAt, bytes.NewReader(ws.lastimg.Image))
+			http.ServeContent(rw, req, "", ws.lastimg.StoredAt, bytes.NewReader(ws.lastimg.Image))
 		}
 	}
 }

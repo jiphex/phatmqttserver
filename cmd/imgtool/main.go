@@ -3,26 +3,17 @@ package main
 import (
 	"fmt"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/png"
 	"os"
 
-	"github.com/jiphex/phatmqttserver/pkg/gen"
+	"github.com/jiphex/phatmqttserver/internal/pkg/phat"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 )
 
 const (
 	flagVerbose = "verbose"
-)
-
-var (
-	phatPallete = color.Palette{
-		color.Black,
-		color.White,
-		color.RGBA{255, 0, 0, 255},
-	}
 )
 
 func main() {
@@ -39,14 +30,14 @@ func main() {
 					},
 				},
 			},
-			{
-				Name:  "generate",
-				Usage: "generate an image from Internet data",
-				Action: func(cc *cli.Context) error {
-					gen.Draw()
-					return nil
-				},
-			},
+			// {
+			// 	Name:  "generate",
+			// 	Usage: "generate an image from Internet data",
+			// 	Action: func(cc *cli.Context) error {
+			// 		gen.Draw()
+			// 		return nil
+			// 	},
+			// },
 		},
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
@@ -77,7 +68,7 @@ func convertImageCmd(cc *cli.Context) error {
 		log.WithError(err).Fatal("unable to load png")
 	}
 	fmt.Printf("image is %+v", img.ColorModel())
-	out := image.NewPaletted(img.Bounds(), phatPallete)
+	out := image.NewPaletted(img.Bounds(), phat.Palette)
 	draw.Draw(out, img.Bounds(), img, img.Bounds().Min, draw.Src)
 	fout, _ := os.Create("out.png")
 	return png.Encode(fout, out)
