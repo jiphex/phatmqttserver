@@ -148,8 +148,12 @@ func (ws *WatcherServer) runPeriodicPublisher(every time.Duration) {
 func (ws *WatcherServer) runSystemdWatchdog(wdt time.Duration) {
 	for {
 		<-time.Tick(wdt / 2)
-		log.Trace("pinging systemd watchdog")
-		daemon.SdNotify(false, daemon.SdNotifyWatchdog)
+		if ws.client.IsConnected() {
+			log.Trace("pinging systemd watchdog")
+			daemon.SdNotify(false, daemon.SdNotifyWatchdog)
+		} else {
+			log.Warning("skipping sd notify due to disconnected MQTT client")
+		}
 	}
 }
 
