@@ -11,20 +11,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coreos/go-systemd/v22/daemon"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gorilla/mux"
 	log "github.com/sirupsen/logrus"
 )
 
-var (
-	imgMutex    = &sync.RWMutex{}
-	clientMutex = &sync.RWMutex{}
-	clients     = map[string]ClientStatus{}
-)
-
 type WatcherServer struct {
-	client  mqtt.Client
-	lastimg *StoredImage
+	client      mqtt.Client
+	lastimg     *StoredImage
+	clients     map[string]ClientStatus
+	clientMutex *sync.RWMutex
+	imgMutex    *sync.RWMutex
 
 	Dir         string
 	ListenAddr  string
@@ -38,9 +36,9 @@ func (ws *WatcherServer) clientUpdate(cl mqtt.Client, msg mqtt.Message) {
 		"client": topicparts[2],
 		"status": string(msg.Payload()),
 	}).Info("client status update")
-	clientMutex.Lock()
-	defer clientMutex.Unlock()
-	clients[topicparts[2]] = ClientStatus{
+	ws.clientMutex.Lock()
+	defer ws.clientMutex.Unlock()
+	ws.clients[topicparts[2]] = ClientStatus{
 		Status:   ClientStatusStatus(msg.Payload()),
 		LastSeen: time.Now(),
 	}
@@ -50,16 +48,19 @@ func (ws *WatcherServer) mqttOpts() *mqtt.ClientOptions {
 	opts := &mqtt.ClientOptions{}
 	opts.SetClientID("mqttphatserver")
 	opts.AddBroker(ws.Broker)
+	opts.SetWill("phatserver/status", "DEAD", byte(1), true)
 	opts.OnConnect = func(client mqtt.Client) {
+		client.Publish("phatserver/status", byte(1), true, "ALIVE")
 		log.WithField("broker", ws.Broker).Info("MQTT broker connected")
 		client.Subscribe("phat/client/+", byte(1), ws.clientUpdate).Wait()
 	}
+	opts.SetAutoReconnect(true)
 	return opts
 }
 
 func (ws *WatcherServer) publishPost() error {
-	imgMutex.RLock()
-	defer imgMutex.RUnlock()
+	ws.imgMutex.RLock()
+	defer ws.imgMutex.RUnlock()
 	if ws.lastimg != nil {
 		u := strings.Join([]string{ws.ExternalURL, "image"}, "/")
 		imgd, err := ws.lastimg.JSONRepresentation(u)
@@ -75,8 +76,8 @@ func (ws *WatcherServer) publishPost() error {
 }
 
 func (ws *WatcherServer) ImageDownload(rw http.ResponseWriter, req *http.Request) {
-	imgMutex.RLock()
-	defer imgMutex.RUnlock()
+	ws.imgMutex.RLock()
+	defer ws.imgMutex.RUnlock()
 	if ws.lastimg == nil {
 		log.Warn("GET request but no image ready for download")
 		rw.WriteHeader(http.StatusNotFound)
@@ -95,10 +96,10 @@ func (ws *WatcherServer) ListClients(rw http.ResponseWriter, req *http.Request) 
 	type clientsListOutput struct {
 		Clients map[string]ClientStatus `json:"clients"`
 	}
-	clientMutex.RLock()
-	defer clientMutex.RUnlock()
+	ws.clientMutex.RLock()
+	defer ws.clientMutex.RUnlock()
 	output := clientsListOutput{
-		Clients: clients,
+		Clients: ws.clients,
 	}
 	rw.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(rw)
@@ -112,8 +113,8 @@ func (ws *WatcherServer) ListClients(rw http.ResponseWriter, req *http.Request) 
 func (ws *WatcherServer) ImageUpload(rw http.ResponseWriter, req *http.Request) {
 	var err error
 	if strings.HasPrefix(req.Header.Get("Content-Type"), "image/") {
-		imgMutex.Lock()
-		defer imgMutex.Unlock()
+		ws.imgMutex.Lock()
+		defer ws.imgMutex.Unlock()
 		imageIsRawVal := req.URL.Query().Get("raw")
 		ws.lastimg, err = CreateImage(req.Body, imageIsRawVal != "true")
 		if err != nil {
@@ -143,7 +144,19 @@ func (ws *WatcherServer) runPeriodicPublisher(every time.Duration) {
 		ws.publishPost()
 	}
 }
+
+func (ws *WatcherServer) runSystemdWatchdog(wdt time.Duration) {
+	for {
+		<-time.Tick(wdt / 2)
+		log.Trace("pinging systemd watchdog")
+		daemon.SdNotify(false, daemon.SdNotifyWatchdog)
+	}
+}
+
 func (ws *WatcherServer) Run(ctx context.Context) error {
+	ws.clientMutex = &sync.RWMutex{}
+	ws.imgMutex = &sync.RWMutex{}
+	ws.clients = make(map[string]ClientStatus)
 	ws.client = mqtt.NewClient(ws.mqttOpts())
 	if token := ws.client.Connect(); token.Wait() && token.Error() != nil {
 		return token.Error()
@@ -156,5 +169,21 @@ func (ws *WatcherServer) Run(ctx context.Context) error {
 	getroutes.Path("/clients").HandlerFunc(ws.ListClients)
 	getroutes.Path("/").HandlerFunc(ws.ImageDownload)
 	log.WithField("listen-addr", ws.ListenAddr).Info("starting HTTP server")
+	if dready, err := daemon.SdNotify(false, daemon.SdNotifyReady); !dready {
+		if err != nil {
+			log.WithError(err).Error("unable to notify systemd of service start due to error")
+		} else {
+			log.Debug("unable to notify systemd of service start but who cares")
+		}
+	}
+	if wdt, err := daemon.SdWatchdogEnabled(false); wdt != 0 {
+		go ws.runSystemdWatchdog(wdt)
+	} else {
+		if err != nil {
+			log.WithError(err).Error("systemd watchdog issue")
+		} else {
+			log.Debug("systemd watchdog not enabled")
+		}
+	}
 	return http.ListenAndServe(ws.ListenAddr, r)
 }
