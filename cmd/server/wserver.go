@@ -24,6 +24,7 @@ type watcherMetrics struct {
 	clientsOnline *prometheus.GaugeVec
 	imagesPut     prometheus.Counter
 	imagesGet     prometheus.Counter
+	lastUpload    prometheus.Gauge
 }
 
 type WatcherServer struct {
@@ -59,6 +60,11 @@ func (ws *WatcherServer) setupMetrics() {
 		Subsystem: "server",
 		Name:      "images_downloaded",
 	})
+	ws.metrics.lastUpload = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "phatmqtt",
+		Subsystem: "server",
+		Name:      "last_upload_at",
+	})
 }
 
 func (ws *WatcherServer) clientUpdate(cl mqtt.Client, msg mqtt.Message) {
@@ -73,7 +79,13 @@ func (ws *WatcherServer) clientUpdate(cl mqtt.Client, msg mqtt.Message) {
 		Status:   ClientStatusStatus(msg.Payload()),
 		LastSeen: time.Now(),
 	}
-	ws.metrics.clientsOnline.WithLabelValues("unknown").Set(float64(len(ws.clients)))
+	status := make(map[string]int)
+	for _, c := range ws.clients {
+		status[string(c.Status)]++
+	}
+	for st := range status {
+		ws.metrics.clientsOnline.WithLabelValues(st).Set(float64(status[st]))
+	}
 }
 
 func (ws *WatcherServer) mqttOpts() *mqtt.ClientOptions {
@@ -161,6 +173,7 @@ func (ws *WatcherServer) ImageUpload(rw http.ResponseWriter, req *http.Request) 
 			"format": ws.lastimg.Type,
 		}).Info("stored image")
 		ws.metrics.imagesPut.Inc()
+		ws.metrics.lastUpload.SetToCurrentTime()
 		// Actually push the thing to MQTT
 		go ws.publishPost()
 		return
