@@ -14,8 +14,17 @@ import (
 	"github.com/coreos/go-systemd/v22/daemon"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 )
+
+type watcherMetrics struct {
+	clientsOnline *prometheus.GaugeVec
+	imagesPut     prometheus.Counter
+	imagesGet     prometheus.Counter
+}
 
 type WatcherServer struct {
 	client      mqtt.Client
@@ -24,10 +33,32 @@ type WatcherServer struct {
 	clientMutex *sync.RWMutex
 	imgMutex    *sync.RWMutex
 
+	metrics watcherMetrics
+
 	Dir         string
 	ListenAddr  string
 	ExternalURL string
 	Broker      string
+}
+
+func (ws *WatcherServer) setupMetrics() {
+	ws.metrics.clientsOnline = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "phatmqtt",
+		Subsystem: "server",
+		Name:      "online_clients",
+	}, []string{
+		"status",
+	})
+	ws.metrics.imagesPut = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "phatmqtt",
+		Subsystem: "server",
+		Name:      "images_posted",
+	})
+	ws.metrics.imagesGet = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "phatmqtt",
+		Subsystem: "server",
+		Name:      "images_downloaded",
+	})
 }
 
 func (ws *WatcherServer) clientUpdate(cl mqtt.Client, msg mqtt.Message) {
@@ -42,6 +73,7 @@ func (ws *WatcherServer) clientUpdate(cl mqtt.Client, msg mqtt.Message) {
 		Status:   ClientStatusStatus(msg.Payload()),
 		LastSeen: time.Now(),
 	}
+	ws.metrics.clientsOnline.WithLabelValues("unknown").Set(float64(len(ws.clients)))
 }
 
 func (ws *WatcherServer) mqttOpts() *mqtt.ClientOptions {
@@ -54,7 +86,7 @@ func (ws *WatcherServer) mqttOpts() *mqtt.ClientOptions {
 		log.WithField("broker", ws.Broker).Info("MQTT broker connected")
 		client.Subscribe("phat/client/+", byte(1), ws.clientUpdate).Wait()
 	}
-	opts.SetAutoReconnect(true)
+	// opts.SetAutoReconnect(true)
 	return opts
 }
 
@@ -85,6 +117,7 @@ func (ws *WatcherServer) ImageDownload(rw http.ResponseWriter, req *http.Request
 		return
 	} else {
 		log.WithField("format", ws.lastimg.Type).Info("GET request, serving cached image")
+		ws.metrics.imagesGet.Inc()
 		rw.Header().Add("Content-Type", ws.lastimg.Type)
 		rw.Header().Set("ETag", ws.lastimg.ETag())
 		// wb, err := rw.Write(ws.lastimg.image)
@@ -127,6 +160,7 @@ func (ws *WatcherServer) ImageUpload(rw http.ResponseWriter, req *http.Request) 
 			"size":   len(ws.lastimg.Image),
 			"format": ws.lastimg.Type,
 		}).Info("stored image")
+		ws.metrics.imagesPut.Inc()
 		// Actually push the thing to MQTT
 		go ws.publishPost()
 		return
@@ -166,13 +200,15 @@ func (ws *WatcherServer) Run(ctx context.Context) error {
 	if token := ws.client.Connect(); token.Wait() && token.Error() != nil {
 		return token.Error()
 	}
+	ws.setupMetrics()
 	go ws.runPeriodicPublisher(10 * 60 * time.Second)
 	r := mux.NewRouter()
 	r.Use(logMw)
 	r.Methods(http.MethodPut).HandlerFunc(ws.ImageUpload)
 	getroutes := r.Methods(http.MethodGet).Subrouter()
-	getroutes.Path("/clients").HandlerFunc(ws.ListClients)
-	getroutes.Path("/").HandlerFunc(ws.ImageDownload)
+	getroutes.Path("/metrics").Handler(promhttp.Handler())
+	getroutes.Path("/image").HandlerFunc(ws.ImageDownload)
+	getroutes.Path("/").HandlerFunc(ws.ListClients)
 	log.WithField("listen-addr", ws.ListenAddr).Info("starting HTTP server")
 	if dready, err := daemon.SdNotify(false, daemon.SdNotifyReady); !dready {
 		if err != nil {
