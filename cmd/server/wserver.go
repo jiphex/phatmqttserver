@@ -146,8 +146,9 @@ func (ws *WatcherServer) runPeriodicPublisher(every time.Duration) {
 }
 
 func (ws *WatcherServer) runSystemdWatchdog(wdt time.Duration) {
+	ticker := time.Tick(wdt / 2)
 	for {
-		<-time.Tick(wdt / 2)
+		<-ticker
 		if ws.client.IsConnected() {
 			log.Trace("pinging systemd watchdog")
 			daemon.SdNotify(false, daemon.SdNotifyWatchdog)
