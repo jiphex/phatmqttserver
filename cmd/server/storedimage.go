@@ -64,7 +64,7 @@ func CreateImage(from io.Reader, convert bool) (*StoredImage, error) {
 		log.WithFields(log.Fields{
 			"problem": "incorrect-size",
 			"imgsize": simgsize,
-		}).Error("bad image size: %s x %s")
+		}).Error("bad image size")
 		return nil, fmt.Errorf("bad image size: %s", simgsize)
 	}
 	log.WithField("format", f).Info("decoded image OK")
