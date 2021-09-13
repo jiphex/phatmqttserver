@@ -89,8 +89,8 @@ func (ws *WatcherServer) clientUpdate(cl mqtt.Client, msg mqtt.Message) {
 }
 
 func (ws *WatcherServer) mqttOpts() *mqtt.ClientOptions {
-	opts := &mqtt.ClientOptions{}
-	opts.SetClientID("mqttphatserver")
+	opts := mqtt.NewClientOptions()
+	opts.SetClientID("phatmqttserver")
 	opts.AddBroker(ws.Broker)
 	opts.SetWill("phatserver/status", "DEAD", byte(1), true)
 	opts.OnConnect = func(client mqtt.Client) {
