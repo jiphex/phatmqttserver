@@ -54,12 +54,17 @@ func CreateImage(from io.Reader, convert bool) (*StoredImage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("undecodable image")
 	}
+	simgsize := fmt.Sprintf("%d 𝗑 %d", imc.Width, imc.Height)
 	if (imc.Width == 212 && imc.Height == 104) || (imc.Width == 104 && imc.Height == 212) {
-		simgsize := fmt.Sprintf("%dx%d", imc.Width, imc.Height)
+		log.WithFields(log.Fields{
+			"imgsize": simgsize,
+			"imgdata": len(imageData),
+		}).Debug("processing image upload")
+	} else {
 		log.WithFields(log.Fields{
 			"problem": "incorrect-size",
-			"badsize": simgsize,
-		}).Error("bad image size")
+			"imgsize": simgsize,
+		}).Error("bad image size: %s x %s")
 		return nil, fmt.Errorf("bad image size: %s", simgsize)
 	}
 	log.WithField("format", f).Info("decoded image OK")
